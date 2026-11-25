@@ -60,6 +60,7 @@ td { font-size:.91rem; overflow-wrap:anywhere; }
     <details>
       <summary>Scoring and tolerances</summary>
       <p class="small">B8:G12 and B13 on the Solution sheet earn one point each. The grader calculates expected answers from the protected yearly copies. Review the 2025 allowance estimate separately. Exact matches and differences below the selected tolerance earn credit.</p>
+      <p class="small">The working-data check compares the original populated inputs by customer. Extra calculations and entries in cells that were blank in the protected copy do not trigger a warning.</p>
       <div class="settings">
         <label for="money">Amount tolerance ($)<input id="money" type="number" min="0" step="any" value="0.001" required></label>
         <label for="rate">Rate tolerance (percentage points)<input id="rate" type="number" min="0" step="any" value="0.10" required></label>
@@ -941,12 +942,26 @@ function expectedAnswers(rows, year) {
     ...groupBalances.map((total, i) => total ? groupWriteoffs[i] / total : null)];
 }
 
-function identical(a, b) {
-  return a.size === b.size && [...a].every(([key, row]) => {
-    const other = b.get(key);
-    return other && row.sales === other.sales && row.balance === other.balance &&
-      row.age === other.age && row.paymentDay === other.paymentDay;
-  });
+function originalInputsMatch(cells, originalRows, year, date1904) {
+  const valueAt = (position) => cells.get(position)?.value;
+  const yearEnd = Date.UTC(year, 11, 31) / 86400000 + 25569;
+  if (dateSerial(valueAt("C1"), date1904) !== yearEnd) return false;
+
+  // Match every original customer while ignoring added work and original blanks.
+  const remaining = new Map(originalRows);
+  for (const [position, {value: customer}] of cells) {
+    const original = remaining.get(customer);
+    if (!original) continue;
+    const row = /^A([0-9]+)$/.exec(position)?.[1];
+    if (!row || Number(row) < 3) continue;
+    if (valueAt("B" + row) === original.sales &&
+        valueAt("C" + row) === original.balance &&
+        dateSerial(valueAt("D" + row), date1904) === yearEnd - original.age &&
+        (original.paymentDay === null || dateSerial(valueAt("E" + row), date1904) === original.paymentDay)) {
+      remaining.delete(customer);
+    }
+  }
+  return remaining.size === 0;
 }
 
 function parseAnswer(entry, kind) {
@@ -996,7 +1011,7 @@ async function assess(file) {
       const rows = sourceRows(original.cells, year, book.date1904);
       try {
         const editable = await book.sheet(name);
-        if (!identical(rows, sourceRows(editable.cells, year, book.date1904))) throw Error();
+        if (!originalInputsMatch(editable.cells, rows, year, book.date1904)) throw Error();
       } catch { warnings.push(year + " working data differ from the protected copy."); }
       for (const [i,expected] of expectedAnswers(rows, year).entries()) {
         const cell = columns[i] + (8+index);
